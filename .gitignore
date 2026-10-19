@@ -1,0 +1,20 @@
+# Build output and temporary files
+*.exe
+*.dll
+*.pdb
+*.tmp
+*.log
+
+# Personal media, hub backups, saved settings and test output
+/media/
+/backups/
+/state/
+/.checks/
+/last-error.txt
+/hub-probe.txt
+/tools/Gif70-*/
+
+# Downloaded references and local investigation notes
+/research/
+/reference/
+/.local-notes/
