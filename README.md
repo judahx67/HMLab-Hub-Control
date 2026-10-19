@@ -10,6 +10,8 @@ Unofficial Windows wallpaper controller for HMLab Z-NEO hubs. It runs offline an
 
 Requires Windows, Windows PowerShell 5.1 and .NET Framework 4.5 or later. The build uses the .NET Framework compiler included with Windows; Visual Studio is not required.
 
+For a ready-to-run copy, download the Windows ZIP from [Releases](https://github.com/judahx67/HMLab-Hub-Control/releases), extract the whole folder and run **HMLab-Hub-Control.exe**. The ZIP includes the cropper and source; no installer is needed.
+
 Double-click **HMLab-Hub-Control.cmd**. It builds the executable when needed and starts the app. To build manually:
 
 ```powershell
