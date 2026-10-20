@@ -35,6 +35,8 @@ The hint above Upload explains any missing step. Detecting the hub confirms its 
 
 Uploads replace the hub's entire stored album with the selected file, then select wallpaper display. The app backs up the previous album in `backups/` and verifies the upload by reading it back. **Skip backup** and **Skip verification** are separate toggles, both off at startup. Cancelling after erasure starts can leave an incomplete album; upload again to replace it.
 
+If wallpaper display is already selected, completing an upload requires no further settings requests. A failure to select that page after a completed upload is reported separately from transfer or verification failures.
+
 The library lives in `media/` beside the executable. Imports keep the original files, rename conflicting copies and reuse identical copies. Remove deletes the library copy after confirmation. Supported formats: GIF, PNG, JPG/JPEG and BMP.
 
 The hub's capacity is read from the device. An 8 MiB hub holds 77 native frames. GIFs keep their frame count but use one average frame delay, as required by the device format. Sideways artwork is prepared on a portrait canvas and rotated into the same 320 x 170 upload buffer. The app does not update firmware.

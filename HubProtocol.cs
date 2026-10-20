@@ -130,10 +130,17 @@ namespace HMLabHub {
                 throw new TimeoutException("No HMLab handshake response.");
             } catch { link.Dispose(); throw; }
         }
-        public void UploadWallpaper(byte[] album,CancellationToken token,Action<int,string> progress,bool verify=true) {
-            Upload(album,token,progress,verify);
+        // A returned warning concerns display selection only; transfer/readback failures still throw.
+        public string UploadWallpaper(byte[] album,CancellationToken token,Action<int,string> progress,bool verify=true) {
             var config=ReadConfig(token);
-            if(config[2]!=2) { config[2]=2; WriteConfigVerified(config,token); }
+            Upload(album,token,progress,verify);
+            if(config[2]==2) return null;
+            try {
+                config=ReadConfig(token);
+                if(config[2]!=2) { config[2]=2; WriteConfigVerified(config,token); }
+                return null;
+            } catch(TimeoutException ex) { return "Could not confirm wallpaper display: "+ex.Message; }
+              catch(IOException ex) { return "Could not confirm wallpaper display: "+ex.Message; }
         }
         public void Upload(byte[] album,CancellationToken token,Action<int,string> progress,bool verify=true) {
             if(album.Length>Info.Flash || album.Length<8192) throw new InvalidDataException("Invalid album size.");

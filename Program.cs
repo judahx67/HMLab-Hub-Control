@@ -76,10 +76,11 @@ namespace HMLabHub {
                         var media=Wallpaper.Prepare(args[2],false,hub.Info.Capacity,CancellationToken.None,ScreenOrientation.IsPortrait(hub.ReadConfig(CancellationToken.None)[3]));
                         var album=Wire.Combine(new List<PreparedMedia>{media},hub.Info.Flash);
                         string backup=SaveBackup(hub,folder,CancellationToken.None,(p,s)=>{});
-                        hub.UploadWallpaper(album,CancellationToken.None,(p,s)=>{});
+                        string displayWarning=hub.UploadWallpaper(album,CancellationToken.None,(p,s)=>{});
                         File.WriteAllText(Path.Combine(folder,"upload-result.txt"),hub.Info+Environment.NewLine+
                             "Uploaded and readback verified: "+Path.GetFullPath(args[2])+Environment.NewLine+
-                            "Frames: "+media.Frames+"; native panel: "+media.Width+" x "+media.Height+"; backup: "+backup);
+                            "Frames: "+media.Frames+"; native panel: "+media.Width+" x "+media.Height+"; backup: "+backup+
+                            (displayWarning==null?"":Environment.NewLine+displayWarning));
                     }
                     return 0;
                 }
@@ -332,9 +333,14 @@ namespace HMLabHub {
                     var buffer=Wire.Combine(new[]{media},hub.Info.Flash); token.ThrowIfCancellationRequested();
                     if(!skip) Program.SaveBackup(hub,Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"backups"),token,Report);
                     token.ThrowIfCancellationRequested(); writing=true;
-                    hub.UploadWallpaper(buffer,token,Report,verify); return hub.Info;
+                    string displayWarning=hub.UploadWallpaper(buffer,token,Report,verify); return new object[]{hub.Info,displayWarning};
                 }
-            },result=> { info=(HubInfo)result; device.Text=port+" | "+info; status.Text=verify?"Uploaded, verified and switched to wallpaper display.":"Upload sent and wallpaper display selected; verification skipped."; },"Preparing wallpapers...");
+            },result=> {
+                var completed=(object[])result; info=(HubInfo)completed[0]; device.Text=port+" | "+info;
+                string displayWarning=completed[1] as string;
+                status.Text=(verify?"Uploaded and verified. ":"Upload sent; verification skipped. ")+
+                    (displayWarning??"Wallpaper display selected.");
+            },"Preparing wallpapers...");
         }
         async void Run(Func<CancellationToken,object> work,Action<object> done,string message) {
             if(busy) return; busy=true; writing=false; cancellation=new CancellationTokenSource(); progress.Value=0; progress.Visible=true; status.Text=message; UpdateButtons(); animation.Stop();

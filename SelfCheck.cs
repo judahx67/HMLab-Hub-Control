@@ -14,7 +14,7 @@ namespace HMLabHub {
     public sealed class SimulatedHub : IHubLink {
         public const int FlashSize=8192+108800*3;
         public byte[] Flash=new byte[FlashSize];
-        public bool Erased,ReadBack,Disposed,Corrupt,OmitFirstChunk;
+        public bool Erased,ReadBack,Disposed,Corrupt,OmitFirstChunk,RejectConfigAfterUpload;
         public int ReadLength;
         public int Uploads,Readbacks;
         public byte[] Config=new byte[]{1,1,2,0,30,0,0,0,0,0,2,50,1,9,8,7,6,5,0,1,255,0,30,1};
@@ -23,7 +23,7 @@ namespace HMLabHub {
             if(!Wire.Valid(p)) throw new Exception("Bad host CRC.");
             if(p[0]==1) { mode=1; return; }
             if(p[0]==3) {
-                if(p[1]==1) { mode=4; return; }
+                if(p[1]==1) { mode=RejectConfigAfterUpload && Uploads>0?5:4; return; }
                 if(p[1]!=2 || Wire.U16(p,2)!=1 || Wire.U16(p,4)!=0 || Wire.U16(p,6)!=28 || Wire.U32(p,32)!=Wire.Crc(p,8,24)) throw new Exception("Incorrect config write framing/CRC.");
                 Array.Copy(p,8,Config,0,24); return;
             }
@@ -40,6 +40,7 @@ namespace HMLabHub {
         }
         public byte[] Read(int timeout,CancellationToken token) {
             token.ThrowIfCancellationRequested();
+            if(mode==5) throw new TimeoutException("No hub command response. Check the USB connection and close other controllers.");
             if(mode==1) {
                 mode=0; var info=new byte[12]; Wire.Put(info,0,0x12345678); Wire.Put(info,4,0x010307); Wire.Put(info,8,FlashSize); return Wire.Packet(1,info);
             }
@@ -124,6 +125,21 @@ namespace HMLabHub {
                 Assert(failed && failedStored.Config[2]==3,"Failed upload changed the display page.");
             }
             log.Add("PASS: successful stored upload selects wallpaper display and preserves all other settings; failed verification leaves the page unchanged.");
+            foreach(bool verifyStored in new[]{true,false}) {
+                var completed=new SimulatedHub { RejectConfigAfterUpload=true }; bool completionFailed=false;
+                using(var hub=new HubSession(completed,CancellationToken.None)) {
+                    try { Assert(hub.UploadWallpaper(album,CancellationToken.None,(p,s)=>{},verifyStored)==null,"Already-selected wallpaper display produced a warning."); }
+                    catch(TimeoutException) { completionFailed=true; }
+                }
+                Assert(completed.Uploads==1 && completed.ReadBack==verifyStored && album.SequenceEqual(completed.Flash.Take(album.Length)),"Completion regression did not finish the requested transfer/verification.");
+                Assert(!completionFailed,"REGRESSION: a completed wallpaper upload is reported as failed because of a redundant settings request.");
+            }
+            log.Add("PASS: completed stored uploads do not request settings again when wallpaper display is already selected, with verification enabled or skipped.");
+            var displayTimeout=new SimulatedHub { RejectConfigAfterUpload=true }; displayTimeout.Config[2]=3;
+            string displayWarning;
+            using(var hub=new HubSession(displayTimeout,CancellationToken.None)) displayWarning=hub.UploadWallpaper(album,CancellationToken.None,(p,s)=>{});
+            Assert(displayTimeout.ReadBack && album.SequenceEqual(displayTimeout.Flash.Take(album.Length)) && displayWarning!=null && displayWarning.StartsWith("Could not confirm wallpaper display:"),"A display-selection timeout hid completed upload/verification or claimed display selection succeeded.");
+            log.Add("PASS: a timeout selecting the display page is returned separately after successful transfer/verification.");
             var unverified=new SimulatedHub(); string uploadResult=null; int uploadPercent=0;
             using(var hub=new HubSession(unverified,CancellationToken.None)) hub.Upload(album,CancellationToken.None,(p,s)=>{ uploadPercent=p; uploadResult=s; },false);
             Assert(unverified.Uploads==1 && !unverified.ReadBack && uploadPercent==100 && uploadResult.Contains("verification skipped"),"Skipping verification still read flash or claimed verified success.");
