@@ -2,8 +2,8 @@
 
 Unofficial Windows wallpaper controller for HMLab Z-NEO hubs. It runs offline and includes a video/GIF cropper. Tested with firmware 1.3.7.
 
-- **Specs:** Local media library, selected-file uploads, four screen orientations, folder playlists and a 70-frame cropper with FFmpeg included in the Windows release.
-- **How:** Run `HMLab-Hub-Control.cmd`; the app detects the connected hub and reads its orientation automatically, with manual port selection available.
+- **Specs:** Local media library, selected-file uploads, four screen orientations, brightness levels 1–30, folder playlists and a 70-frame cropper with FFmpeg included in the Windows release.
+- **How:** Run `HMLab-Hub-Control.cmd`; the app detects the hub and reads its screen settings, with manual port selection and separate Apply controls.
 - **Why:** Manage hub wallpapers without opening the web driver, and keep a library larger than the hub's storage.
 
 ## Run
@@ -36,6 +36,14 @@ Media conversion and preview use [FFmpeg](https://ffmpeg.org/), copyright the FF
 The hint above Upload explains any missing step. Detecting the hub confirms its current orientation; changing the dropdown requires Apply before uploading.
 
 Automatic detection runs once at startup in the background and only opens a port identified as an HMLab hub, regardless of its COM number. If the hub is missing or busy, the status explains how to retry without an error popup. It does not change settings or wallpapers.
+
+## Screen brightness
+
+Detection reads the current brightness from the hub. Move the **Brightness** slider or enter a level from **1 to 30**, then click **Apply brightness**. Moving the controls only changes the pending value; startup never applies a brightness setting. Applying reads fresh configuration, changes only brightness and verifies the settings readback. Orientation, display page and stored wallpapers are preserved. A failed or cancelled apply requires **Detect hub** before retrying, since the actual brightness may be uncertain.
+
+The selectable range matches the vendor driver's 1–30 controls. A stored zero is displayed as the current value without changing it automatically; selecting 1–30 and applying enables a supported level. An unknown stored value disables brightness editing until a supported configuration is detected.
+
+## Stored album
 
 Uploads replace the hub's entire stored album with the selected file, then select wallpaper display. The app backs up the previous album in `backups/` and verifies the upload by reading it back. **Skip backup** and **Skip verification** are separate toggles, both off at startup. Cancelling after erasure starts can leave an incomplete album; upload again to replace it.
 
@@ -77,7 +85,7 @@ These checks use generated media and a simulated hub; they do not open USB devic
 .\Test.ps1 -Cropper  # also check the cropper; requires FFmpeg
 ```
 
-The controller checks cover transfer framing, readback failures, cancellation, configuration preservation, sideways packing, library imports and orientation guidance. The cropper checks cover trimming, rotation, frame count, playback and export handoff. Reports and UI captures are written under `.checks/`.
+The controller checks cover transfer framing, readback failures, cancellation, brightness bounds and settings preservation, sideways packing, library imports and orientation guidance. UI checks run in a Windows message loop with cross-thread access checks enabled; controller checks time out after 60 seconds. The cropper checks cover trimming, rotation, frame count, playback and export handoff. Reports and UI captures are written under `.checks/`.
 
 Protocol details are in [PROTOCOL.md](PROTOCOL.md). This project uses **AGPL-3.0-or-later**; see [LICENSE](LICENSE) and [THIRD-PARTY.md](THIRD-PARTY.md).
 

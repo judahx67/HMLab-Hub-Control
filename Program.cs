@@ -144,6 +144,7 @@ namespace HMLabHub {
         public Func<string[]> PortNames=SerialPort.GetPortNames;
         public Func<string[],string> FindPort=HubForm.FindHubPort;
         public Func<string,IHubLink> Open=port=>new SerialLink(port);
+        public Action<IWin32Window,string> ShowError=(owner,message)=> { MessageBox.Show(owner,message,"HMLab Hub Control",MessageBoxButtons.OK,MessageBoxIcon.Error); };
     }
     public sealed class HubForm : Form {
         LivePlaylistPanel live; readonly TabControl tabs=new TabControl(); readonly TabPage stored=new TabPage("Stored wallpapers"),streaming=new TabPage("Folder playlist");
@@ -151,7 +152,8 @@ namespace HMLabHub {
         readonly Queue<string[]> pendingImports=new Queue<string[]>(); bool importing;
         readonly ComboBox ports=new ComboBox(),fit=new ComboBox(),orientation=new ComboBox();
         readonly Button detect=new Button(),applyOrientation=new Button(),add=new Button(),remove=new Button(),crop=new Button(),upload=new Button(),cancel=new Button();
-        byte? detectedOrientation;
+        readonly TrackBar brightness=new TrackBar(); readonly NumericUpDown brightnessLevel=new NumericUpDown(); readonly Button applyBrightness=new Button(); readonly Label brightnessState=new Label();
+        byte? detectedOrientation,detectedBrightness;
         readonly CheckBox skipBackup=new CheckBox(),skipVerification=new CheckBox();
         readonly ListBox files=new ListBox();
         readonly PictureBox preview=new PictureBox();
@@ -164,9 +166,10 @@ namespace HMLabHub {
         internal HubForm(string mediaDirectory,string cropScript=null,HubAccess access=null) {
             library=new MediaLibrary(mediaDirectory); cropScriptOverride=cropScript; this.access=access??new HubAccess();
             Text="HMLab Hub Control - playlists and wallpapers"; Font=new Font("Segoe UI",10);
-            BackColor=Color.FromArgb(245,247,250); ClientSize=new Size(1020,690); MinimumSize=new Size(900,620); StartPosition=FormStartPosition.CenterScreen;
-            var layout=new TableLayoutPanel { Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=6 };
+            BackColor=Color.FromArgb(245,247,250); ClientSize=new Size(1020,732); MinimumSize=new Size(900,662); StartPosition=FormStartPosition.CenterScreen;
+            var layout=new TableLayoutPanel { Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=7 };
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent,100)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute,76));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,46)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));
             tabs.Dock=DockStyle.Fill; stored.Controls.Add(layout); tabs.TabPages.Add(stored); tabs.TabPages.Add(streaming); Controls.Add(tabs);
@@ -177,7 +180,15 @@ namespace HMLabHub {
             orientation.Width=190; orientation.DropDownStyle=ComboBoxStyle.DropDownList;
             orientation.Items.AddRange(new object[]{"Normal (0°)","Upside down (180°)","Sideways (90°)","Sideways (270°)"}); orientation.SelectedIndex=0; connection.Controls.Add(orientation);
             ButtonStyle(applyOrientation,"Apply",80); connection.Controls.Add(applyOrientation); layout.Controls.Add(connection,0,0);
-            device.Text="Detect hub to read its screen orientation; Apply changes only orientation."; device.Dock=DockStyle.Fill; device.AutoEllipsis=true; layout.Controls.Add(device,0,1);
+            device.Text="Detect hub to read its orientation and brightness."; device.Dock=DockStyle.Fill; device.AutoEllipsis=true; layout.Controls.Add(device,0,1);
+            var lighting=Row(); lighting.Controls.Add(new Label { Text="Brightness",AutoSize=true,Margin=new Padding(3,8,8,0) });
+            brightness.Minimum=HubSession.MinimumBrightness; brightness.Maximum=HubSession.MaximumBrightness; brightness.Value=HubSession.MaximumBrightness;
+            brightness.AutoSize=false; brightness.Size=new Size(235,32); brightness.TickStyle=TickStyle.None; brightness.LargeChange=5; brightness.AccessibleName="Screen brightness";
+            lighting.Controls.Add(brightness);
+            brightnessLevel.Minimum=HubSession.MinimumBrightness; brightnessLevel.Maximum=HubSession.MaximumBrightness; brightnessLevel.Value=HubSession.MaximumBrightness;
+            brightnessLevel.Width=55; brightnessLevel.Margin=new Padding(3,4,3,0); brightnessLevel.AccessibleName="Brightness level from 1 to 30"; lighting.Controls.Add(brightnessLevel);
+            ButtonStyle(applyBrightness,"Apply brightness",145); lighting.Controls.Add(applyBrightness);
+            brightnessState.AutoSize=true; brightnessState.Margin=new Padding(10,8,0,0); lighting.Controls.Add(brightnessState); layout.Controls.Add(lighting,0,2);
             var body=new TableLayoutPanel { Dock=DockStyle.Fill,ColumnCount=2,RowCount=2 };
             body.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,300)); body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
             body.RowStyles.Add(new RowStyle(SizeType.Percent,100)); body.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
@@ -186,14 +197,14 @@ namespace HMLabHub {
             preview.Dock=DockStyle.Fill; preview.BackColor=Color.FromArgb(27,31,39); preview.SizeMode=PictureBoxSizeMode.Zoom; body.Controls.Add(preview,1,0);
             var tools=Row(); ButtonStyle(add,"Add files...",100); ButtonStyle(remove,"Remove",85); ButtonStyle(crop,"Crop tool",95);
             tools.Controls.AddRange(new Control[]{add,remove,crop}); body.Controls.Add(tools,0,1);
-            description.Dock=DockStyle.Fill; description.Padding=new Padding(10,5,0,0); description.Text="Native panel preview: 320 x 170"; body.Controls.Add(description,1,1); layout.Controls.Add(body,0,2);
+            description.Dock=DockStyle.Fill; description.Padding=new Padding(10,5,0,0); description.Text="Native panel preview: 320 x 170"; body.Controls.Add(description,1,1); layout.Controls.Add(body,0,3);
             var options=Row(); options.Controls.Add(new Label { Text="Resize",AutoSize=true,Margin=new Padding(3,9,8,0) });
             fit.DropDownStyle=ComboBoxStyle.DropDownList; fit.Width=240; fit.Items.AddRange(new object[]{"Fit inside (black bars)","Fill panel (center crop)"}); fit.SelectedIndex=0; options.Controls.Add(fit);
             options.Controls.Add(new Label { Text="GIF timing uses one average delay per animation.",AutoSize=true,Margin=new Padding(15,9,0,0) });
             var uploadOptions=new TableLayoutPanel { Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty };
             uploadOptions.RowStyles.Add(new RowStyle(SizeType.Absolute,40)); uploadOptions.RowStyles.Add(new RowStyle(SizeType.Percent,100));
             uploadHint.Dock=DockStyle.Fill; uploadHint.TextAlign=ContentAlignment.MiddleLeft; uploadHint.Padding=new Padding(3,0,0,0);
-            uploadOptions.Controls.Add(options,0,0); uploadOptions.Controls.Add(uploadHint,0,1); layout.Controls.Add(uploadOptions,0,3);
+            uploadOptions.Controls.Add(options,0,0); uploadOptions.Controls.Add(uploadHint,0,1); layout.Controls.Add(uploadOptions,0,4);
             var actions=Row(); ButtonStyle(upload,"Upload selected media",225); upload.BackColor=Color.FromArgb(38,110,210); upload.ForeColor=Color.White;
             ButtonStyle(cancel,"Cancel",100);
             skipBackup.Appearance=Appearance.Button; skipBackup.AutoSize=false; skipBackup.Size=new Size(150,32); skipBackup.FlatStyle=FlatStyle.Flat;
@@ -201,11 +212,11 @@ namespace HMLabHub {
             skipVerification.Appearance=Appearance.Button; skipVerification.AutoSize=false; skipVerification.Size=new Size(180,32); skipVerification.FlatStyle=FlatStyle.Flat;
             skipVerification.TextAlign=ContentAlignment.MiddleCenter; skipVerification.Checked=false;
             skipBackup.CheckedChanged+=delegate { UpdateUploadOptions(); }; skipVerification.CheckedChanged+=delegate { UpdateUploadOptions(); };
-            actions.Controls.AddRange(new Control[]{upload,cancel,skipBackup,skipVerification}); note.AutoSize=true; note.Margin=new Padding(10,9,0,0); actions.Controls.Add(note); layout.Controls.Add(actions,0,4); UpdateUploadOptions();
+            actions.Controls.AddRange(new Control[]{upload,cancel,skipBackup,skipVerification}); note.AutoSize=true; note.Margin=new Padding(10,9,0,0); actions.Controls.Add(note); layout.Controls.Add(actions,0,5); UpdateUploadOptions();
             var footer=new TableLayoutPanel { Dock=DockStyle.Fill,ColumnCount=2 };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,220));
             status.Dock=DockStyle.Fill; status.Text="Add media to your library, then select a file to preview or upload."; status.AutoEllipsis=true;
-            progress.Dock=DockStyle.Fill; progress.Visible=false; footer.Controls.Add(status,0,0); footer.Controls.Add(progress,1,0); layout.Controls.Add(footer,0,5);
+            progress.Dock=DockStyle.Fill; progress.Visible=false; footer.Controls.Add(status,0,0); footer.Controls.Add(progress,1,0); layout.Controls.Add(footer,0,6);
             CancelButton=cancel; cancel.DialogResult=DialogResult.None;
             tabs.SelectedIndexChanged+=delegate { CancelButton=tabs.SelectedTab==streaming && live!=null?live.CancelControl:cancel; cancel.DialogResult=DialogResult.None; if(live!=null) live.CancelControl.DialogResult=DialogResult.None; };
             tabs.Selecting+=delegate(object sender,TabControlCancelEventArgs e) {
@@ -217,6 +228,9 @@ namespace HMLabHub {
             detect.Click+=delegate { RefreshPorts(); Probe(); };
             orientation.SelectedIndexChanged+=delegate { RenderPreview(); UpdateButtons(); status.Text="Apply the chosen orientation before uploading; sideways uses portrait media."; };
             applyOrientation.Click+=delegate { ApplyOrientation(); };
+            brightness.ValueChanged+=delegate { brightnessLevel.Value=brightness.Value; };
+            brightnessLevel.ValueChanged+=delegate { brightness.Value=(int)brightnessLevel.Value; UpdateButtons(); };
+            applyBrightness.Click+=delegate { ApplyBrightness(); };
             add.Click+=delegate { using(var dialog=new OpenFileDialog { Filter="Images and GIFs|*.gif;*.png;*.jpg;*.jpeg;*.bmp|All files|*.*",Multiselect=true }) if(dialog.ShowDialog(this)==DialogResult.OK) {
                 QueueImports(dialog.FileNames); } };
             remove.Click+=delegate {
@@ -226,7 +240,7 @@ namespace HMLabHub {
             };
             crop.Click+=delegate { OpenCropper(); };
             files.SelectedIndexChanged+=delegate { LoadPreview(); }; fit.SelectedIndexChanged+=delegate { RenderPreview(); };
-            ports.SelectedIndexChanged+=delegate { info=null; detectedOrientation=null; device.Text="Selected "+ports.Text+"; Detect hub reads its identity and orientation."; UpdateButtons(); };
+            ports.SelectedIndexChanged+=delegate { info=null; detectedOrientation=null; detectedBrightness=null; device.Text="Selected "+ports.Text+"; Detect hub reads its identity, orientation and brightness."; UpdateButtons(); };
             upload.Click+=delegate { BeginUpload(); };
             cancel.Click+=delegate { if(busy) { cancellation.Cancel(); status.Text="Cancelling..."; } else Close(); };
             animation.Tick+=delegate { if(source==null || frames<2) return; frameIndex=(frameIndex+1)%frames; source.SelectActiveFrame(FrameDimension.Time,frameIndex); RenderPreview(); };
@@ -320,8 +334,9 @@ namespace HMLabHub {
         void Probe(bool automatic=false) {
             if(string.IsNullOrEmpty(ports.Text)) { status.Text="No serial port found. Plug in the hub and try again."; return; }
             string port=ports.Text;
-            Run(token=> { using(var hub=new HubSession(access.Open(port),token)) { byte value=hub.ReadConfig(token)[3]; ScreenOrientation.IsPortrait(value); return new object[]{hub.Info,value}; } },result=> {
-                var data=(object[])result; info=(HubInfo)data[0]; detectedOrientation=(byte)data[1]; orientation.SelectedIndex=detectedOrientation.Value;
+            Run(token=> { using(var hub=new HubSession(access.Open(port),token)) { var config=hub.ReadConfig(token); ScreenOrientation.IsPortrait(config[3]); return new object[]{hub.Info,config}; } },result=> {
+                var data=(object[])result; var config=(byte[])data[1]; info=(HubInfo)data[0]; detectedOrientation=config[3]; orientation.SelectedIndex=detectedOrientation.Value;
+                detectedBrightness=config[4]; brightnessLevel.Value=Math.Max(HubSession.MinimumBrightness,Math.Min(HubSession.MaximumBrightness,(int)config[4]));
                 if(live!=null) live.SetScreenOrientation(detectedOrientation.Value);
                 RenderPreview(); device.Text=port+" | "+info; status.Text="Hub found. Screen: "+orientation.Text+". Select media to crop or upload.";
             },"Reading hub identity...",!automatic);
@@ -334,6 +349,17 @@ namespace HMLabHub {
                 if(live!=null) live.SetScreenOrientation(value);
                 status.Text="Screen orientation applied and readback verified: "+orientation.Text+"."; RenderPreview();
             },"Applying screen orientation...");
+        }
+        void ApplyBrightness() {
+            if(busy || importing || !detectedBrightness.HasValue || detectedBrightness.Value>HubSession.MaximumBrightness || string.IsNullOrEmpty(ports.Text)) return;
+            string port=ports.Text; int level=(int)brightnessLevel.Value;
+            detectedBrightness=null;
+            Run(token=> { using(var hub=new HubSession(access.Open(port),token)) { return new object[]{hub.Info,hub.SetBrightness(level,token)}; } },result=> {
+                var data=(object[])result; var config=(byte[])data[1]; info=(HubInfo)data[0]; detectedBrightness=config[4]; detectedOrientation=config[3];
+                device.Text=port+" | "+info;
+                if(live!=null) live.SetScreenOrientation(detectedOrientation.Value);
+                status.Text="Brightness applied and readback verified: "+detectedBrightness.Value+" / 30.";
+            },"Applying brightness...");
         }
         void BeginUpload() {
             string selected=files.SelectedItem as string; if(selected==null || string.IsNullOrEmpty(ports.Text)) return;
@@ -361,7 +387,7 @@ namespace HMLabHub {
             if(busy) return; busy=true; writing=false; cancellation=new CancellationTokenSource(); progress.Value=0; progress.Visible=true; status.Text=message; UpdateButtons(); animation.Stop();
             try { var result=await Task.Run(()=>work(cancellation.Token)); done(result); }
             catch(OperationCanceledException) { status.Text=writing?"Upload stopped. The album may be incomplete; retry to restore it.":"Cancelled."; }
-            catch(Exception ex) { status.Text=showErrors?ex.Message:"Automatic detection could not connect. Close other controllers, select a port and click Detect hub. "+ex.Message; if(showErrors && !closing) MessageBox.Show(this,ex.Message,"HMLab Hub Control",MessageBoxButtons.OK,MessageBoxIcon.Error); }
+            catch(Exception ex) { status.Text=showErrors?ex.Message:"Automatic detection could not connect. Close other controllers, select a port and click Detect hub. "+ex.Message; if(showErrors && !closing) access.ShowError(this,ex.Message); }
             finally { busy=false; writing=false; progress.Visible=false; cancellation.Dispose(); cancellation=null; UpdateButtons(); if(source!=null && frames>1) animation.Start(); if(closing) Close(); else ImportPending(); }
         }
         void Report(int percent,string text) {
@@ -374,6 +400,11 @@ namespace HMLabHub {
         void UpdateButtons() {
             if(live!=null) live.Enabled=!busy;
             bool idle=!busy && !importing;
+            bool brightnessKnown=detectedBrightness.HasValue && detectedBrightness.Value<=HubSession.MaximumBrightness;
+            brightness.Enabled=brightnessLevel.Enabled=idle && brightnessKnown;
+            applyBrightness.Enabled=idle && brightnessKnown && brightnessLevel.Value!=detectedBrightness.Value;
+            brightnessState.Text=!detectedBrightness.HasValue?"Detect hub to read brightness.":!brightnessKnown?"Unsupported brightness: "+detectedBrightness.Value:
+                "Current: "+detectedBrightness.Value+" / 30"+(brightnessLevel.Value==detectedBrightness.Value?"":"; pending: "+brightnessLevel.Value);
             ports.Enabled=detect.Enabled=add.Enabled=files.Enabled=fit.Enabled=orientation.Enabled=skipBackup.Enabled=skipVerification.Enabled=idle;
             applyOrientation.Enabled=idle && !string.IsNullOrEmpty(ports.Text);
             remove.Enabled=idle && files.SelectedItem!=null; crop.Enabled=idle && cropSession==null;

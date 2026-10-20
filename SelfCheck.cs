@@ -14,18 +14,19 @@ namespace HMLabHub {
     public sealed class SimulatedHub : IHubLink {
         public const int FlashSize=8192+108800*3;
         public byte[] Flash=new byte[FlashSize];
-        public bool Erased,ReadBack,Disposed,Corrupt,OmitFirstChunk,RejectConfigAfterUpload;
+        public bool Erased,ReadBack,Disposed,Corrupt,OmitFirstChunk,RejectConfigAfterUpload,IgnoreConfigWrites,FailConfigWrites,FailConfigReads;
         public int ReadLength;
-        public int Uploads,Readbacks;
+        public int Uploads,Readbacks,ConfigReads,ConfigWrites;
         public byte[] Config=new byte[]{1,1,2,0,30,0,0,0,0,0,2,50,1,9,8,7,6,5,0,1,255,0,30,1};
         int mode,offset,total;
         public void Write(byte[] p) {
             if(!Wire.Valid(p)) throw new Exception("Bad host CRC.");
             if(p[0]==1) { mode=1; return; }
             if(p[0]==3) {
-                if(p[1]==1) { mode=RejectConfigAfterUpload && Uploads>0?5:4; return; }
+                if(p[1]==1) { ConfigReads++; mode=FailConfigReads || (RejectConfigAfterUpload && Uploads>0)?5:4; return; }
                 if(p[1]!=2 || Wire.U16(p,2)!=1 || Wire.U16(p,4)!=0 || Wire.U16(p,6)!=28 || Wire.U32(p,32)!=Wire.Crc(p,8,24)) throw new Exception("Incorrect config write framing/CRC.");
-                Array.Copy(p,8,Config,0,24); return;
+                if(FailConfigWrites) throw new IOException("Simulated settings write failed.");
+                ConfigWrites++; if(!IgnoreConfigWrites) Array.Copy(p,8,Config,0,24); return;
             }
             if(p[0]!=8) throw new Exception("Unexpected host command.");
             if(p[1]==3) throw new Exception("REGRESSION: host sent the vendor CLEAR opcode.");
@@ -61,6 +62,21 @@ namespace HMLabHub {
     public static class SelfCheck {
         static void Assert(bool ok,string message) { if(!ok) throw new Exception(message); }
         public static void Run(string directory) {
+            AppDomain.CurrentDomain.UnhandledException+=(sender,args)=>File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"last-error.txt"),args.ExceptionObject.ToString());
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
+            Control.CheckForIllegalCrossThreadCalls=true;
+            Exception failure=null;
+            using(var context=new ApplicationContext()) using(var start=new System.Windows.Forms.Timer { Interval=1 }) {
+                start.Tick+=delegate {
+                    start.Stop();
+                    try { RunChecks(directory); } catch(Exception ex) { failure=ex; }
+                    finally { context.ExitThread(); }
+                };
+                start.Start(); Application.Run(context);
+            }
+            if(failure!=null) throw new Exception("Controller checks failed.",failure);
+        }
+        static void RunChecks(string directory) {
             if(string.IsNullOrEmpty(directory)) directory=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,".checks");
             Directory.CreateDirectory(directory); var log=new List<string>();
             string gif=CreateGifFixture(directory);
@@ -103,6 +119,7 @@ namespace HMLabHub {
                 Assert(orientationRejected && !orientationHub.Erased && !orientationHub.ReadBack,"Orientation setting accepted an unknown value or touched wallpaper flash.");
             }
             log.Add("PASS: all four screen orientations read/modify/write only screen_dir, verify settings, reject unknown values and leave wallpaper flash untouched.");
+            CheckBrightnessProtocol(log);
             var pixels=new byte[108800*2]; for(int i=0;i<pixels.Length;i++) pixels[i]=(byte)(i*17);
             var album=Wire.Album(pixels,2,50,SimulatedHub.FlashSize);
             Assert(Wire.U32(album,0)==0xc0190001 && Wire.U16(album,4)==320 && Wire.U16(album,6)==170,"Header dimensions failed.");
@@ -306,6 +323,7 @@ namespace HMLabHub {
             }
             log.Add("PASS: failed native readback never starts display time; oversized GIFs are rejected before touching flash.");
             CheckStartupDetection(directory,log);
+            CheckBrightnessControls(directory,log);
             using(var form=new HubForm(Path.Combine(directory,"screenshot-media"),null,NoHardwareAccess())) form.CaptureScreenshot(Path.Combine(directory,"control-ui.png"),gif);
             log.Add("PASS: Windows UI builds and renders.");
             File.WriteAllLines(Path.Combine(directory,"self-check.txt"),log);
@@ -372,7 +390,91 @@ namespace HMLabHub {
         }
         static T Field<T>(object owner,string name) { return (T)owner.GetType().GetField(name,BindingFlags.Instance|BindingFlags.NonPublic).GetValue(owner); }
         static HubAccess NoHardwareAccess() {
-            return new HubAccess { PortNames=()=>new string[0],FindPort=active=>null,Open=port=> { throw new Exception("Self-check tried to open a physical port: "+port); } };
+            return new HubAccess { PortNames=()=>new string[0],FindPort=active=>null,Open=port=> { throw new Exception("Self-check tried to open a physical port: "+port); },ShowError=(owner,message)=> { throw new Exception("Unexpected error popup: "+message); } };
+        }
+        static void CheckBrightnessProtocol(List<string> log) {
+            var fake=new SimulatedHub(); fake.Config[2]=3; fake.Config[3]=2; var original=(byte[])fake.Config.Clone();
+            for(int i=0;i<fake.Flash.Length;i++) fake.Flash[i]=(byte)(i*37);
+            var flash=(byte[])fake.Flash.Clone();
+            using(var hub=new HubSession(fake,CancellationToken.None)) {
+                for(int level=HubSession.MinimumBrightness;level<=HubSession.MaximumBrightness;level++) {
+                    byte[] actual=hub.SetBrightness(level,CancellationToken.None);
+                    Assert(actual[4]==level && fake.Config[4]==level && actual.SequenceEqual(fake.Config),"Brightness readback did not match the selected level.");
+                    Assert(original.Where((v,i)=>i!=4).SequenceEqual(fake.Config.Where((v,i)=>i!=4)),"Brightness changed orientation, page or another configuration byte.");
+                }
+                int writes=fake.ConfigWrites; hub.SetBrightness(30,CancellationToken.None);
+                Assert(fake.ConfigWrites==writes,"Applying unchanged brightness wrote settings again.");
+                foreach(int invalid in new[]{-1,0,31,256,int.MaxValue}) {
+                    int reads=fake.ConfigReads; bool rejected=false;
+                    try { hub.SetBrightness(invalid,CancellationToken.None); } catch(ArgumentOutOfRangeException) { rejected=true; }
+                    Assert(rejected && fake.ConfigReads==reads && fake.ConfigWrites==writes,"Invalid brightness sent a device command.");
+                }
+                using(var stopped=new CancellationTokenSource()) {
+                    stopped.Cancel(); int reads=fake.ConfigReads; bool cancelled=false;
+                    try { hub.SetBrightness(15,stopped.Token); } catch(OperationCanceledException) { cancelled=true; }
+                    Assert(cancelled && fake.ConfigReads==reads && fake.ConfigWrites==writes,"Cancelled brightness adjustment accessed settings.");
+                }
+            }
+            Assert(fake.Disposed && !fake.Erased && !fake.ReadBack && fake.Flash.SequenceEqual(flash),"Brightness accessed or altered wallpaper flash or retained the port.");
+            foreach(int failure in new[]{0,1,2}) {
+                var failed=new SimulatedHub { IgnoreConfigWrites=failure==0,FailConfigReads=failure==1,FailConfigWrites=failure==2 }; bool rejected=false;
+                using(var hub=new HubSession(failed,CancellationToken.None)) {
+                    try { hub.SetBrightness(12,CancellationToken.None); } catch(InvalidDataException) { rejected=true; } catch(IOException) { rejected=true; } catch(TimeoutException) { rejected=true; }
+                }
+                Assert(rejected && failed.Config[4]==30 && failed.Disposed && !failed.Erased && !failed.ReadBack,"Failed brightness read/write/verification was accepted or touched wallpaper storage.");
+            }
+            log.Add("PASS: all 30 brightness levels change only byte 4 and verify readback; unchanged values skip writes, invalid/cancelled requests send no settings commands, failures propagate, and wallpaper flash stays byte-for-byte unchanged.");
+        }
+        static void CheckBrightnessControls(string directory,List<string> log) {
+            var current=new SimulatedHub().Config; current[4]=15;
+            var opened=new List<SimulatedHub>(); var errors=new List<string>(); bool fail=false,cancel=false;
+            HubForm form=null;
+            var access=new HubAccess {
+                PortNames=()=>new[]{"COM17","COM6"},FindPort=active=>"COM17",
+                Open=port=> {
+                    if(cancel) { cancel=false; Field<CancellationTokenSource>(form,"cancellation").Cancel(); }
+                    var hub=new SimulatedHub { Config=(byte[])current.Clone(),IgnoreConfigWrites=fail }; opened.Add(hub); return hub;
+                },
+                ShowError=(owner,message)=>errors.Add(message)
+            };
+            using(form=new HubForm(Path.Combine(directory,"brightness-media"),null,access)) {
+                var slider=Field<TrackBar>(form,"brightness"); var level=Field<NumericUpDown>(form,"brightnessLevel"); var apply=Field<Button>(form,"applyBrightness");
+                Assert(!slider.Enabled && !level.Enabled && !apply.Enabled,"Brightness was editable before device detection.");
+                form.ShowInTaskbar=false; form.Opacity=0; form.Show(); Application.DoEvents();
+                PumpUntil(()=>!Field<bool>(form,"busy"),"Brightness detection did not finish.");
+                Assert(slider.Value==15 && level.Value==15 && !apply.Enabled && Field<byte?>(form,"detectedBrightness")==15 && opened.Count==1 && opened[0].ConfigWrites==0,"Detection failed to read brightness without changing it.");
+                slider.Value=10; Assert(level.Value==10 && apply.Enabled,"Brightness slider did not update numeric level.");
+                level.Value=18; Assert(slider.Value==18 && opened.Count==1 && Field<Label>(form,"brightnessState").Text.Contains("pending: 18"),"Editing brightness accessed the device or did not show the pending level.");
+                Field<ComboBox>(form,"orientation").SelectedIndex=1;
+                current[2]=3; current[3]=2; current[13]=91; byte[] before=(byte[])current.Clone();
+                apply.PerformClick();
+                Assert(Field<bool>(form,"busy") && !apply.Enabled && !slider.Enabled && !level.Enabled && !Field<ComboBox>(form,"ports").Enabled,"Brightness apply permitted concurrent settings changes.");
+                PumpUntil(()=>!Field<bool>(form,"busy"),"Brightness apply did not finish.");
+                var written=opened.Last();
+                Assert(written.ConfigWrites==1 && written.ConfigReads==2 && written.Config[4]==18 && written.Disposed && !written.Erased && !written.ReadBack && before.Where((v,i)=>i!=4).SequenceEqual(written.Config.Where((v,i)=>i!=4)),"Brightness UI failed to preserve fresh settings or verify its write.");
+                Assert(errors.Count==0 && Field<byte?>(form,"detectedBrightness")==18 && Field<byte?>(form,"detectedOrientation")==2 && Field<ComboBox>(form,"orientation").SelectedIndex==1 && !apply.Enabled && Field<Label>(form,"status").Text.Contains("readback verified: 18 / 30"),"Brightness success lost a pending orientation edit or reported incorrect confirmation.");
+                Size originalSize=form.Size; form.Size=form.MinimumSize; Application.DoEvents();
+                var hint=Field<Label>(form,"brightnessState");
+                Assert(hint.Right<=hint.Parent.ClientSize.Width && apply.Bottom<=apply.Parent.ClientSize.Height,"Brightness controls are clipped at minimum window size.");
+                using(var bitmap=new Bitmap(form.Width,form.Height)) { form.DrawToBitmap(bitmap,new Rectangle(0,0,form.Width,form.Height)); bitmap.Save(Path.Combine(directory,"brightness-ui-minimum.png")); }
+                form.Size=originalSize; Application.DoEvents();
+                current=(byte[])written.Config.Clone(); fail=true; level.Value=19; apply.PerformClick();
+                PumpUntil(()=>!Field<bool>(form,"busy"),"Rejected brightness write did not finish.");
+                Assert(errors.Count==1 && Field<byte?>(form,"detectedBrightness")==null && !apply.Enabled && !slider.Enabled && Field<Label>(form,"brightnessState").Text.Contains("Detect hub"),"Failed brightness verification retained a stale confirmation or claimed success.");
+                fail=false; Field<Button>(form,"detect").PerformClick(); PumpUntil(()=>!Field<bool>(form,"busy"),"Brightness retry detection did not finish.");
+                Assert(level.Value==18 && slider.Value==18,"Retry detection did not restore the actual brightness.");
+                level.Value=20; cancel=true; apply.PerformClick(); PumpUntil(()=>!Field<bool>(form,"busy"),"Cancelled brightness apply did not finish.");
+                Assert(opened.Last().ConfigWrites==0 && opened.Last().Disposed && Field<byte?>(form,"detectedBrightness")==null && errors.Count==1,"Cancelled brightness apply wrote settings or retained confirmation.");
+                current[4]=0; Field<Button>(form,"detect").PerformClick(); PumpUntil(()=>!Field<bool>(form,"busy"),"Zero brightness detection did not finish.");
+                Assert(Field<byte?>(form,"detectedBrightness")==0 && level.Value==1 && Field<Label>(form,"brightnessState").Text.Contains("Current: 0 / 30") && opened.Last().ConfigWrites==0,"Stored zero was not displayed without changing it.");
+                current[4]=255; Field<Button>(form,"detect").PerformClick(); PumpUntil(()=>!Field<bool>(form,"busy"),"Unsupported brightness detection did not finish.");
+                Assert(!slider.Enabled && !level.Enabled && !apply.Enabled && Field<Label>(form,"brightnessState").Text.Contains("Unsupported brightness: 255"),"Unsupported brightness allowed a settings write.");
+                Field<ComboBox>(form,"ports").SelectedItem="COM6";
+                Assert(Field<byte?>(form,"detectedBrightness")==null && !slider.Enabled && !apply.Enabled,"Changing ports retained another hub's brightness confirmation.");
+                Assert(Field<LivePlaylistPanel>(form,"live")==null && Field<CropSession>(form,"cropSession")==null,"Brightness loaded an optional feature.");
+                form.Close();
+            }
+            log.Add("PASS: brightness UI reads current levels, links slider/numeric edits without I/O, applies only on click, preserves fresh settings and pending orientation, invalidates failed/cancelled settings, and handles zero/unknown values and port changes safely.");
         }
         static void CheckStartupDetection(string directory,List<string> log) {
             var detected=new SimulatedHub(); detected.Config[3]=2; byte[] original=(byte[])detected.Config.Clone();

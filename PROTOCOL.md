@@ -22,6 +22,8 @@ Command 3/subcommand 1 reads configuration. Subcommand 2 writes a chunk containi
 
 Read fresh configuration before changing a field. Preserve the other bytes, including reserved values. Applying orientation changes byte 3 only. A successful stored upload selects page 2; live sessions restore only their previous page, preserving settings changed during playback.
 
+Brightness applies the same read/modify/write/readback sequence and changes **byte 4 only**. The saved vendor 1.3.7 driver serializes `screen_brightness` at offset 4 and exposes a slider with `min=1`, `max=30`, `step=1`; this app uses that selectable range. A stored zero is readable but never written by brightness adjustment. Invalid requested levels are rejected before sending any command, and applying the current level skips the settings write. Brightness never uses command 8 or any firmware-update command.
+
 ## Stored media
 
 An upload replaces the album collection. The image starts with an 8192-byte header area containing up to 292 consecutive 28-byte album headers, followed by raw frame data.

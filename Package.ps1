@@ -111,7 +111,11 @@ The source archive is not needed to run the application.
         if ($LASTEXITCODE -ne 0 -or $versionText[0] -notlike "ffmpeg version $($pin.Version) *") { throw 'Bundled FFmpeg did not start.' }
         & (Join-Path $package 'tools\ffprobe.exe') -version | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Bundled ffprobe did not start.' }
-        $check = Start-Process -FilePath $executable -ArgumentList @('--self-check',('"{0}"' -f $checks)) -WindowStyle Hidden -PassThru -Wait
+        $check = Start-Process -FilePath $executable -ArgumentList @('--self-check',('"{0}"' -f $checks)) -WindowStyle Hidden -PassThru
+        if (-not $check.WaitForExit(60000)) {
+            $check.Kill()
+            throw 'Packaged controller checks timed out; stopped only the test process.'
+        }
         if ($check.ExitCode -ne 0) { throw 'Packaged controller checks failed.' }
         & $shell -NoProfile -STA -ExecutionPolicy Bypass -File (Join-Path $package 'tools\Gif70.ps1') -SelfCheck -CheckDirectory (Join-Path $checks 'cropper')
         if ($LASTEXITCODE -ne 0) { throw 'Packaged cropper checks failed.' }

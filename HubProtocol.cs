@@ -112,6 +112,7 @@ namespace HMLabHub {
         public void Dispose() { port.Dispose(); }
     }
     public sealed class HubSession : IDisposable {
+        public const int MinimumBrightness=1,MaximumBrightness=30;
         readonly IHubLink link;
         public HubInfo Info { get; private set; }
         public HubSession(IHubLink link,CancellationToken token) {
@@ -188,6 +189,13 @@ namespace HMLabHub {
             var raw=ReadConfig(token);
             if(raw[3]==orientation) return;
             raw[3]=orientation; WriteConfigVerified(raw,token);
+        }
+        public byte[] SetBrightness(int level,CancellationToken token) {
+            if(level<MinimumBrightness || level>MaximumBrightness) throw new ArgumentOutOfRangeException("level","Brightness must be between 1 and 30.");
+            token.ThrowIfCancellationRequested();
+            var raw=ReadConfig(token);
+            if(raw[4]!=(byte)level) { raw[4]=(byte)level; WriteConfigVerified(raw,token); }
+            return raw;
         }
         public void WriteConfigVerified(byte[] raw,CancellationToken token) {
             if(raw.Length!=24) throw new InvalidDataException("Expected exactly 24 configuration bytes.");
