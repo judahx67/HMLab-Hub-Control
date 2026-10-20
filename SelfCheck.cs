@@ -305,7 +305,8 @@ namespace HMLabHub {
                 Assert(noFit && !fake.Erased && fake.Readbacks==0,"Oversized native GIF touched flash before capacity validation.");
             }
             log.Add("PASS: failed native readback never starts display time; oversized GIFs are rejected before touching flash.");
-            using(var form=new HubForm()) form.CaptureScreenshot(Path.Combine(directory,"control-ui.png"),gif);
+            CheckStartupDetection(directory,log);
+            using(var form=new HubForm(Path.Combine(directory,"screenshot-media"),null,NoHardwareAccess())) form.CaptureScreenshot(Path.Combine(directory,"control-ui.png"),gif);
             log.Add("PASS: Windows UI builds and renders.");
             File.WriteAllLines(Path.Combine(directory,"self-check.txt"),log);
         }
@@ -370,6 +371,50 @@ namespace HMLabHub {
             log.Add("PASS: sideways corner pattern packs counterclockwise into native LCD bounds, previews upright, rejects portrait headers and preserves 70 frames in all orientations.");
         }
         static T Field<T>(object owner,string name) { return (T)owner.GetType().GetField(name,BindingFlags.Instance|BindingFlags.NonPublic).GetValue(owner); }
+        static HubAccess NoHardwareAccess() {
+            return new HubAccess { PortNames=()=>new string[0],FindPort=active=>null,Open=port=> { throw new Exception("Self-check tried to open a physical port: "+port); } };
+        }
+        static void CheckStartupDetection(string directory,List<string> log) {
+            var detected=new SimulatedHub(); detected.Config[3]=2; byte[] original=(byte[])detected.Config.Clone();
+            var manual=new SimulatedHub(); manual.Config[3]=1;
+            var opened=new List<string>();
+            var access=new HubAccess {
+                PortNames=()=>new[]{"COM6","COM17"},FindPort=active=>"COM17",
+                Open=port=> { opened.Add(port); return port=="COM17"?detected:manual; }
+            };
+            using(var form=new HubForm(Path.Combine(directory,"startup-media"),null,access)) {
+                Assert(opened.Count==0,"Startup opened a hub before showing the window.");
+                form.ShowInTaskbar=false; form.Opacity=0; form.Show(); Application.DoEvents();
+                PumpUntil(()=>!Field<bool>(form,"busy"),"Automatic hub detection did not finish.");
+                var ports=Field<ComboBox>(form,"ports");
+                Assert(opened.SequenceEqual(new[]{"COM17"}) && ports.Text=="COM17" && Field<byte?>(form,"detectedOrientation")==2 && Field<ComboBox>(form,"orientation").SelectedIndex==2,"Startup did not identify the USB-matched hub and read its orientation automatically.");
+                Assert(detected.Disposed && !detected.Erased && !detected.ReadBack && original.SequenceEqual(detected.Config),"Automatic detection changed settings/media or retained the COM port.");
+                Assert(Field<LivePlaylistPanel>(form,"live")==null && Field<CropSession>(form,"cropSession")==null,"Automatic detection loaded optional features.");
+                ports.SelectedItem="COM6";
+                Assert(Field<byte?>(form,"detectedOrientation")==null && !Field<Button>(form,"upload").Enabled,"Reselecting a port retained the previous device's confirmation.");
+                Field<Button>(form,"detect").PerformClick();
+                PumpUntil(()=>!Field<bool>(form,"busy"),"Manual detection did not finish.");
+                Assert(opened.SequenceEqual(new[]{"COM17","COM6"}) && ports.Text=="COM6" && Field<byte?>(form,"detectedOrientation")==1 && manual.Disposed,"Automatic preference overrode the user's manual port selection.");
+                form.Close();
+            }
+            foreach(bool connected in new[]{false,true}) {
+                var absent=NoHardwareAccess(); if(connected) absent.PortNames=()=>new[]{"COM6"};
+                using(var form=new HubForm(Path.Combine(directory,"no-hub-media"),null,absent)) {
+                    form.ShowInTaskbar=false; form.Opacity=0; form.Show(); Application.DoEvents();
+                    Assert(!Field<bool>(form,"busy") && Field<byte?>(form,"detectedOrientation")==null && Field<Label>(form,"status").Text.Contains("No HMLab hub detected automatically"),"Missing hub did not leave manual detection available.");
+                    Assert(Field<ComboBox>(form,"ports").Enabled && Field<Button>(form,"detect").Enabled,"Missing hub disabled manual recovery.");
+                    form.Close();
+                }
+            }
+            var unavailable=new HubAccess { PortNames=()=>new[]{"COM11"},FindPort=active=>"COM11",Open=port=> { throw new UnauthorizedAccessException("Port is busy."); } };
+            using(var form=new HubForm(Path.Combine(directory,"busy-hub-media"),null,unavailable)) {
+                form.ShowInTaskbar=false; form.Opacity=0; form.Show(); Application.DoEvents();
+                PumpUntil(()=>!Field<bool>(form,"busy"),"Busy startup port blocked the UI.");
+                Assert(Field<byte?>(form,"detectedOrientation")==null && Field<Label>(form,"status").Text.StartsWith("Automatic detection could not connect.") && Field<Button>(form,"detect").Enabled,"Failed automatic detection did not explain manual retry.");
+                form.Close();
+            }
+            log.Add("PASS: startup detects the USB-matched hub on any COM number, reads orientation without writes, releases the port, keeps optional UI unloaded, honors manual overrides and handles absent/busy hubs without a popup.");
+        }
         static void PumpUntil(Func<bool> completed,string message) {
             var clock=Stopwatch.StartNew();
             while(!completed() && clock.ElapsedMilliseconds<15000) { Application.DoEvents(); Thread.Sleep(10); }
@@ -412,7 +457,7 @@ $clock=[Diagnostics.Stopwatch]::StartNew()
 while(-not [IO.File]::Exists('ACK') -and $clock.Elapsed.TotalSeconds -lt 12) { Start-Sleep -Milliseconds 50 }
 ".Replace("ARGS",argsFile.Replace("'","''")).Replace("OTHER",other.Replace("'","''")).Replace("ACK",ack.Replace("'","''"));
             File.WriteAllText(script,fixtureScript,Encoding.UTF8);
-            using(var form=new HubForm(mediaFolder,script)) {
+            using(var form=new HubForm(mediaFolder,script,NoHardwareAccess())) {
                 var list=Field<ListBox>(form,"files");
                 Assert(Field<LivePlaylistPanel>(form,"live")==null && Field<CropSession>(form,"cropSession")==null && Field<Image>(form,"source")==null && list.SelectedIndex==-1,"Startup loaded a playlist, cropper, or GIF preview.");
                 Assert(list.Items.Count==1,"Stored library did not list saved files on startup.");

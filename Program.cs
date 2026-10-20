@@ -140,9 +140,14 @@ namespace HMLabHub {
             File.WriteAllText(path+".txt",hub.Info.ToString()); return path;
         }
     }
+    internal sealed class HubAccess {
+        public Func<string[]> PortNames=SerialPort.GetPortNames;
+        public Func<string[],string> FindPort=HubForm.FindHubPort;
+        public Func<string,IHubLink> Open=port=>new SerialLink(port);
+    }
     public sealed class HubForm : Form {
         LivePlaylistPanel live; readonly TabControl tabs=new TabControl(); readonly TabPage stored=new TabPage("Stored wallpapers"),streaming=new TabPage("Folder playlist");
-        readonly MediaLibrary library; readonly string cropScriptOverride; CropSession cropSession;
+        readonly MediaLibrary library; readonly string cropScriptOverride; readonly HubAccess access; CropSession cropSession;
         readonly Queue<string[]> pendingImports=new Queue<string[]>(); bool importing;
         readonly ComboBox ports=new ComboBox(),fit=new ComboBox(),orientation=new ComboBox();
         readonly Button detect=new Button(),applyOrientation=new Button(),add=new Button(),remove=new Button(),crop=new Button(),upload=new Button(),cancel=new Button();
@@ -156,8 +161,8 @@ namespace HMLabHub {
         Image source; Stream sourceStream; int frameIndex,frames; HubInfo info;
         CancellationTokenSource cancellation; bool busy,closing,writing; int lastReport;
         public HubForm() : this(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"media")) { }
-        internal HubForm(string mediaDirectory,string cropScript=null) {
-            library=new MediaLibrary(mediaDirectory); cropScriptOverride=cropScript;
+        internal HubForm(string mediaDirectory,string cropScript=null,HubAccess access=null) {
+            library=new MediaLibrary(mediaDirectory); cropScriptOverride=cropScript; this.access=access??new HubAccess();
             Text="HMLab Hub Control - playlists and wallpapers"; Font=new Font("Segoe UI",10);
             BackColor=Color.FromArgb(245,247,250); ClientSize=new Size(1020,690); MinimumSize=new Size(900,620); StartPosition=FormStartPosition.CenterScreen;
             var layout=new TableLayoutPanel { Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=6 };
@@ -229,7 +234,11 @@ namespace HMLabHub {
                 if(live!=null && live.IsRunning) { e.Cancel=true; closing=true; live.Stop(); }
                 if(busy) { e.Cancel=true; closing=true; cancellation.Cancel(); }
             };
-            RefreshPorts(); RefreshLibrary(null); UpdateButtons();
+            string startupPort=RefreshPorts(); RefreshLibrary(null); UpdateButtons();
+            Shown+=delegate {
+                if(startupPort!=null && ports.Text==startupPort && !busy) Probe(true);
+                else status.Text="No HMLab hub detected automatically. Connect it, or select its port and click Detect hub.";
+            };
         }
         void EnsureLive() {
             if(live!=null) return;
@@ -285,10 +294,16 @@ namespace HMLabHub {
             skipVerification.BackColor=skipVerification.Checked?Color.FromArgb(215,232,255):Color.White;
             note.Text=skipBackup.Checked?(skipVerification.Checked?"Both skipped":"Verify only"):(skipVerification.Checked?"Backup only":"Backup + verify");
         }
-        void RefreshPorts() {
-            string old=ports.Text; var active=SerialPort.GetPortNames().OrderBy(x=>x).ToArray(); ports.Items.Clear(); ports.Items.AddRange(active);
-            string found=FindHubPort(active); string chosen=active.Contains(old)?old:found;
+        string RefreshPorts() {
+            string old=ports.Text; var active=access.PortNames().OrderBy(x=>x).ToArray(); ports.Items.Clear(); ports.Items.AddRange(active);
+            string found=null;
+            try { found=access.FindPort(active); }
+            catch(System.Security.SecurityException) { }
+            catch(UnauthorizedAccessException) { }
+            catch(IOException) { }
+            string chosen=active.Contains(old)?old:found;
             if(chosen!=null && ports.Items.Contains(chosen)) ports.SelectedItem=chosen; else if(ports.Items.Count>0) ports.SelectedIndex=0;
+            return found;
         }
         public static string FindHubPort(string[] active) {
             using(var root=Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Enum\USB")) {
@@ -302,19 +317,19 @@ namespace HMLabHub {
             }
             return null;
         }
-        void Probe() {
+        void Probe(bool automatic=false) {
             if(string.IsNullOrEmpty(ports.Text)) { status.Text="No serial port found. Plug in the hub and try again."; return; }
             string port=ports.Text;
-            Run(token=> { using(var hub=new HubSession(new SerialLink(port),token)) { byte value=hub.ReadConfig(token)[3]; ScreenOrientation.IsPortrait(value); return new object[]{hub.Info,value}; } },result=> {
+            Run(token=> { using(var hub=new HubSession(access.Open(port),token)) { byte value=hub.ReadConfig(token)[3]; ScreenOrientation.IsPortrait(value); return new object[]{hub.Info,value}; } },result=> {
                 var data=(object[])result; info=(HubInfo)data[0]; detectedOrientation=(byte)data[1]; orientation.SelectedIndex=detectedOrientation.Value;
                 if(live!=null) live.SetScreenOrientation(detectedOrientation.Value);
                 RenderPreview(); device.Text=port+" | "+info; status.Text="Hub found. Screen: "+orientation.Text+". Select media to crop or upload.";
-            },"Reading hub identity...");
+            },"Reading hub identity...",!automatic);
         }
         void ApplyOrientation() {
             if(string.IsNullOrEmpty(ports.Text)) return;
             string port=ports.Text; byte value=(byte)orientation.SelectedIndex;
-            Run(token=> { using(var hub=new HubSession(new SerialLink(port),token)) { hub.SetOrientation(value,token); return hub.Info; } },result=> {
+            Run(token=> { using(var hub=new HubSession(access.Open(port),token)) { hub.SetOrientation(value,token); return hub.Info; } },result=> {
                 info=(HubInfo)result; detectedOrientation=value; device.Text=port+" | "+info;
                 if(live!=null) live.SetScreenOrientation(value);
                 status.Text="Screen orientation applied and readback verified: "+orientation.Text+"."; RenderPreview();
@@ -325,7 +340,7 @@ namespace HMLabHub {
             if(!detectedOrientation.HasValue || detectedOrientation.Value!=orientation.SelectedIndex) { status.Text="Detect the hub or Apply orientation before uploading."; return; }
             string port=ports.Text; byte expectedOrientation=detectedOrientation.Value; bool fill=fit.SelectedIndex==1,skip=skipBackup.Checked,verify=!skipVerification.Checked;
             Run(token=> {
-                using(var hub=new HubSession(new SerialLink(port),token)) {
+                using(var hub=new HubSession(access.Open(port),token)) {
                     Report(0,"Preparing "+Path.GetFileName(selected)+"...");
                     byte current=hub.ReadConfig(token)[3];
                     if(current!=expectedOrientation) throw new InvalidOperationException("The hub orientation changed. Detect hub again before uploading.");
@@ -342,11 +357,11 @@ namespace HMLabHub {
                     (displayWarning??"Wallpaper display selected.");
             },"Preparing wallpapers...");
         }
-        async void Run(Func<CancellationToken,object> work,Action<object> done,string message) {
+        async void Run(Func<CancellationToken,object> work,Action<object> done,string message,bool showErrors=true) {
             if(busy) return; busy=true; writing=false; cancellation=new CancellationTokenSource(); progress.Value=0; progress.Visible=true; status.Text=message; UpdateButtons(); animation.Stop();
             try { var result=await Task.Run(()=>work(cancellation.Token)); done(result); }
             catch(OperationCanceledException) { status.Text=writing?"Upload stopped. The album may be incomplete; retry to restore it.":"Cancelled."; }
-            catch(Exception ex) { status.Text=ex.Message; if(!closing) MessageBox.Show(this,ex.Message,"HMLab Hub Control",MessageBoxButtons.OK,MessageBoxIcon.Error); }
+            catch(Exception ex) { status.Text=showErrors?ex.Message:"Automatic detection could not connect. Close other controllers, select a port and click Detect hub. "+ex.Message; if(showErrors && !closing) MessageBox.Show(this,ex.Message,"HMLab Hub Control",MessageBoxButtons.OK,MessageBoxIcon.Error); }
             finally { busy=false; writing=false; progress.Visible=false; cancellation.Dispose(); cancellation=null; UpdateButtons(); if(source!=null && frames>1) animation.Start(); if(closing) Close(); else ImportPending(); }
         }
         void Report(int percent,string text) {

@@ -3,7 +3,7 @@
 Unofficial Windows wallpaper controller for HMLab Z-NEO hubs. It runs offline and includes a video/GIF cropper. Tested with firmware 1.3.7.
 
 - **Specs:** Local media library, selected-file uploads, four screen orientations, folder playlists and a cropper that exports exactly 70 frames.
-- **How:** Run `HMLab-Hub-Control.cmd`, detect the hub, confirm its orientation, then select a file to crop or upload.
+- **How:** Run `HMLab-Hub-Control.cmd`; the app detects the connected hub and reads its orientation automatically, with manual port selection available.
 - **Why:** Manage hub wallpapers without opening the web driver, and keep a library larger than the hub's storage.
 
 ## Run
@@ -26,12 +26,14 @@ Keep `tools/` with the executable when moving the app. The cropper starts only w
 ## Upload a wallpaper
 
 1. Disconnect the hub in its web driver and close any other controller using its COM port.
-2. Select the hub's port and click **Detect hub** to read its screen orientation.
+2. The app selects a connected HMLab hub by its USB ID and reads its identity and screen orientation after opening; select another port and click **Detect hub** to retry or override it.
 3. If needed, choose **Normal (0°)**, **Upside down (180°)**, **Sideways (90°)** or **Sideways (270°)** and click **Apply**.
 4. Use **Add files** to copy GIFs or images into the library. Select one and choose **Fit** or **Fill**.
 5. Click **Upload selected media**.
 
 The hint above Upload explains any missing step. Detecting the hub confirms its current orientation; changing the dropdown requires Apply before uploading.
+
+Automatic detection runs once at startup in the background and only opens a port identified as an HMLab hub, regardless of its COM number. If the hub is missing or busy, the status explains how to retry without an error popup. It does not change settings or wallpapers.
 
 Uploads replace the hub's entire stored album with the selected file, then select wallpaper display. The app backs up the previous album in `backups/` and verifies the upload by reading it back. **Skip backup** and **Skip verification** are separate toggles, both off at startup. Cancelling after erasure starts can leave an incomplete album; upload again to replace it.
 
