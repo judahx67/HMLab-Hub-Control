@@ -2,7 +2,7 @@
 
 Unofficial Windows wallpaper controller for HMLab Z-NEO hubs. It runs offline and includes a video/GIF cropper. Tested with firmware 1.3.7.
 
-- **Specs:** Local media library, selected-file uploads, four screen orientations, folder playlists and a cropper that exports exactly 70 frames.
+- **Specs:** Local media library, selected-file uploads, four screen orientations, folder playlists and a 70-frame cropper with FFmpeg included in the Windows release.
 - **How:** Run `HMLab-Hub-Control.cmd`; the app detects the connected hub and reads its orientation automatically, with manual port selection available.
 - **Why:** Manage hub wallpapers without opening the web driver, and keep a library larger than the hub's storage.
 
@@ -10,7 +10,7 @@ Unofficial Windows wallpaper controller for HMLab Z-NEO hubs. It runs offline an
 
 Requires Windows, Windows PowerShell 5.1 and .NET Framework 4.5 or later. The build uses the .NET Framework compiler included with Windows; Visual Studio is not required.
 
-For a ready-to-run copy, download the Windows ZIP from [Releases](https://github.com/judahx67/HMLab-Hub-Control/releases), extract the whole folder and run **HMLab-Hub-Control.exe**. The ZIP includes the cropper and source; no installer is needed.
+For a ready-to-run copy, download the Windows ZIP from [Releases](https://github.com/judahx67/HMLab-Hub-Control/releases), extract the whole folder and run **HMLab-Hub-Control.exe**. The ZIP includes the cropper, FFmpeg, ffprobe, their required DLLs and the controller source; no installer or separate FFmpeg setup is needed. The bundled tools require 64-bit Windows 10 or later.
 
 Double-click **HMLab-Hub-Control.cmd**. It builds the executable when needed and starts the app. To build manually:
 
@@ -19,9 +19,11 @@ Double-click **HMLab-Hub-Control.cmd**. It builds the executable when needed and
 .\HMLab-Hub-Control.exe
 ```
 
-The cropper also needs `ffmpeg.exe` and `ffprobe.exe` on PATH or beside `tools/Gif70.ps1`. They are not required for ordinary wallpaper uploads. **Crop-Gif.cmd** opens the cropper on its own.
+When running from a source checkout, the cropper needs `ffmpeg.exe` and `ffprobe.exe` on PATH or beside `tools/Gif70.ps1`. Release packages already supply these files and their DLLs in `tools/`. They are not required for ordinary wallpaper uploads. **Crop-Gif.cmd** opens the cropper on its own.
 
 Keep `tools/` with the executable when moving the app. The cropper starts only when opened, and the playlist panel loads only when its tab is selected.
+
+Media conversion and preview use [FFmpeg](https://ffmpeg.org/), copyright the FFmpeg developers. The bundled FFmpeg 9.0.2 build is supplied by [TAS-FFMPEG](https://github.com/NevermindNilas/TAS-FFMPEG/releases/tag/v9.0.2) under **GPL-2.0-or-later**; its dependencies retain their own licenses. Credits, license texts and build details are included in `licenses/ffmpeg/`. The matching complete source archive, including dependencies and build scripts, is a separate download beside the Windows ZIP in the same release. See [THIRD-PARTY.md](THIRD-PARTY.md).
 
 ## Upload a wallpaper
 
@@ -78,3 +80,7 @@ These checks use generated media and a simulated hub; they do not open USB devic
 The controller checks cover transfer framing, readback failures, cancellation, configuration preservation, sideways packing, library imports and orientation guidance. The cropper checks cover trimming, rotation, frame count, playback and export handoff. Reports and UI captures are written under `.checks/`.
 
 Protocol details are in [PROTOCOL.md](PROTOCOL.md). This project uses **AGPL-3.0-or-later**; see [LICENSE](LICENSE) and [THIRD-PARTY.md](THIRD-PARTY.md).
+
+## Package a release
+
+From a clean, committed checkout, run `./Package.ps1 -Version 0.1.3`. The script downloads the checksum-pinned FFmpeg build and corresponding source, preserves its notices, builds the controller and checks the packaged controller and cropper with FFmpeg removed from PATH. It writes the Windows ZIP, corresponding-source archive and `SHA256SUMS.txt` under `.checks/packages/`. Publish all three files together; the source archive is for redistribution and is not needed to run the app. Downloads are cached under `.checks/ffmpeg-downloads/` and never committed.
