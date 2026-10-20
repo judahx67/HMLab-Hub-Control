@@ -118,7 +118,15 @@ The source archive is not needed to run the application.
     } finally { $env:PATH = $savedPath }
     $archive = Join-Path $output "HMLab-Hub-Control-v$Version-windows-x64.zip"
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [IO.Compression.ZipFile]::CreateFromDirectory($package,$archive,[IO.Compression.CompressionLevel]::Optimal,$true)
+    Add-Type -AssemblyName System.IO.Compression
+    $zip = [IO.Compression.ZipFile]::Open($archive,[IO.Compression.ZipArchiveMode]::Create)
+    try {
+        # .NET Framework's CreateFromDirectory writes legacy backslash entry names.
+        foreach ($file in Get-ChildItem -LiteralPath $package -Recurse -File) {
+            $entry = 'HMLab-Hub-Control/' + $file.FullName.Substring($package.Length + 1).Replace('\','/')
+            [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip,$file.FullName,$entry,[IO.Compression.CompressionLevel]::Optimal)
+        }
+    } finally { $zip.Dispose() }
     $sourceOutput = Join-Path $output $pin.Source.Name
     Copy-Item -LiteralPath $sourceArchive -Destination $sourceOutput
     Assert-Hash $sourceOutput $pin.Source.Sha256
